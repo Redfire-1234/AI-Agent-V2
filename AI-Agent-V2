@@ -1,0 +1,479 @@
+# install libraries
+!pip install -q transformers accelerate bitsandbytes datasets peft sentencepiece
+
+# download zip from huggingface
+from huggingface_hub import login, hf_hub_download
+
+login()
+
+zip_path = hf_hub_download(
+    repo_id="HuggingFace REpo/Datasetname",
+    filename="AI_agent.zip",
+    repo_type="dataset"
+)
+
+print("ZIP downloaded to:", zip_path)
+
+# unzip and verify files
+!unzip -o "$zip_path" -d ./AI_agent_data
+
+import os
+for root, dirs, files in os.walk("./AI_agent_data", topdown=False):
+    for name in files:
+        print(os.path.join(root, name))
+
+
+# load and merge CSVs
+import pandas as pd
+import glob
+
+path = "./AI_agent_data/*.csv"
+files = glob.glob(path)
+
+dfs = []
+for file in files:
+    df = pd.read_csv(file)
+    platform = file.split("/")[-1].replace(".csv", "")
+    df["platform"] = platform
+    dfs.append(df)
+
+final_df = pd.concat(dfs, ignore_index=True)
+final_df.head()
+
+
+# clean dataset
+final_df.drop_duplicates(inplace=True)
+final_df.dropna(subset=["text"], inplace=True)
+
+import re
+def clean_text(x):
+    x = re.sub(r"http\S+", "", x)
+    x = re.sub(r"[^\x00-\x7F]+", " ", x)
+    return x.strip()
+
+final_df["text"] = final_df["text"].astype(str).apply(clean_text)
+final_df = final_df[final_df["text"].str.len() > 5]
+
+final_df = final_df.rename(columns={"text": "prompt", "platform": "source"})
+final_df.to_csv("ai_agent_cleaned.csv", index=False)
+
+print(f"Cleaned dataset: {len(final_df)} rows")
+
+import random
+
+df = pd.read_csv("ai_agent_cleaned.csv")
+
+# Conversational templates for natural responses
+conversational_pairs = []
+
+# Add natural greetings and common phrases
+common_qa = [
+    ("hi", "Hello! How can I help you today?"),
+    ("hello", "Hi there! What can I do for you?"),
+    ("hey", "Hey! How can I assist you?"),
+    ("good morning", "Good morning! How can I help?"),
+    ("good evening", "Good evening! What can I do for you?"),
+    
+    ("how are you", "I'm doing great, thanks for asking! How can I help you today?"),
+    ("how are you doing", "I'm here and ready to help! What do you need?"),
+    ("what's up", "Not much! Just here to help you. What can I do for you?"),
+    
+    ("who are you", "I'm an AI assistant trained to help answer questions and have conversations."),
+    ("what is your name", "I'm an AI assistant. You can call me whatever you'd like! How can I help?"),
+    ("what can you do", "I can answer questions, have conversations, and help with various topics. What would you like to know?"),
+    
+    ("thank you", "You're welcome! Let me know if you need anything else."),
+    ("thanks", "Happy to help! Is there anything else I can assist with?"),
+    ("thanks a lot", "My pleasure! Feel free to ask if you have more questions."),
+    
+    ("bye", "Goodbye! Have a wonderful day!"),
+    ("goodbye", "Take care! Come back anytime you need help."),
+    ("see you", "See you later! Have a great day!"),
+    
+    ("help", "I'm here to help! What do you need assistance with?"),
+    ("i need help", "Of course! What can I help you with?"),
+    
+    ("tell me a joke", "Why did the AI go to school? To improve its learning rate! 😄"),
+    ("make me laugh", "What do you call an AI that sings? A-Dell! 🎵"),
+]
+
+# Add variations (uppercase, capitalized)
+for user_msg, bot_msg in common_qa:
+    conversational_pairs.append({"input": user_msg, "output": bot_msg})
+    conversational_pairs.append({"input": user_msg.upper(), "output": bot_msg})
+    conversational_pairs.append({"input": user_msg.capitalize(), "output": bot_msg})
+
+# Create natural Q&A from your dataset
+def create_natural_qa(text, source):
+    """Create natural conversational pairs from social media content"""
+    
+    # Shorten text for responses
+    short_text = text[:150] + "..." if len(text) > 150 else text
+    very_short = text[:80] + "..." if len(text) > 80 else text
+    
+    qa_templates = [
+        # Information requests
+        (
+            f"What's trending on {source}?",
+            f"Here's something interesting from {source}: {short_text}"
+        ),
+        (
+            f"Tell me about {source} posts",
+            f"I found this on {source}: {short_text}"
+        ),
+        (
+            "What's this about?",
+            f"This is about: {very_short}"
+        ),
+        
+        # Summaries
+        (
+            "Can you summarize this?",
+            f"Sure! In short: {very_short}"
+        ),
+        (
+            "Give me the main idea",
+            f"The main point is: {very_short}"
+        ),
+        
+        # Explanations
+        (
+            "Explain this to me",
+            f"Here's what this means: {short_text}"
+        ),
+        (
+            "What does this mean?",
+            f"This is discussing: {very_short}"
+        ),
+        
+        # Content requests
+        (
+            "Show me something interesting",
+            f"Here's an interesting post: {short_text}"
+        ),
+        (
+            "Give me content ideas",
+            f"Based on current trends, you could write about: {very_short}"
+        ),
+    ]
+    
+    return random.choice(qa_templates)
+
+# Generate from dataset
+print("Generating conversational pairs from dataset...")
+for idx, row in df.iterrows():
+    if idx % 100 == 0:
+        print(f"Processed {idx}/{len(df)} rows")
+    
+    user_q, bot_a = create_natural_qa(row['prompt'], row['source'])
+    conversational_pairs.append({"input": user_q, "output": bot_a})
+
+print(f"\nTotal training examples created: {len(conversational_pairs)}")
+
+# Create final dataset
+df_chat = pd.DataFrame(conversational_pairs)
+
+# Shuffle the data
+df_chat = df_chat.sample(frac=1, random_state=42).reset_index(drop=True)
+
+# Save
+df_chat.to_csv("chatbot_dataset_improved.csv", index=False)
+
+print("\n Improved dataset created!")
+print(f"Total examples: {len(df_chat)}")
+print("\nSample conversations:")
+print(df_chat.head(10))
+
+# LOAD AND PREPARE DATASET
+
+from datasets import load_dataset
+
+dataset = load_dataset("csv", data_files="chatbot_dataset_improved.csv")["train"]
+dataset = dataset.train_test_split(test_size=0.1, seed=42)
+
+train_dataset = dataset["train"].select(range(min(3000, len(dataset["train"]))))
+eval_dataset = dataset["test"].select(range(min(300, len(dataset["test"]))))
+
+print(f"Training samples: {len(train_dataset)}")
+print(f"Evaluation samples: {len(eval_dataset)}")
+
+# TOKENIZER + TOKENIZE FUNCTION
+
+from transformers import AutoTokenizer
+
+model_name = "Qwen/Qwen2.5-1.5B-Instruct"
+tokenizer = AutoTokenizer.from_pretrained(model_name)
+
+def tokenize_function(example):
+    """Tokenize with proper chat format"""
+    formatted_texts = []
+    
+    for inp, out in zip(example["input"], example["output"]):
+        # Format as conversation
+        messages = [
+            {"role": "user", "content": inp},
+            {"role": "assistant", "content": out}
+        ]
+        
+        try:
+            # Use chat template if available
+            text = tokenizer.apply_chat_template(
+                messages,
+                tokenize=False,
+                add_generation_prompt=False
+            )
+        except:
+            # Fallback format
+            text = f"User: {inp}\nAssistant: {out}"
+        
+        formatted_texts.append(text)
+    
+    tokens = tokenizer(
+        formatted_texts,
+        padding="max_length",
+        truncation=True,
+        max_length=256,
+    )
+    tokens["labels"] = tokens["input_ids"].copy()
+    return tokens
+
+tokenized_train = train_dataset.map(tokenize_function, batched=True, remove_columns=["input", "output"])
+tokenized_eval = eval_dataset.map(tokenize_function, batched=True, remove_columns=["input", "output"])
+
+print("Tokenization complete!")
+
+
+# LOAD MODEL WITH QLORA
+
+import torch
+from transformers import AutoModelForCausalLM, BitsAndBytesConfig
+
+quant_config = BitsAndBytesConfig(
+    load_in_4bit=True,
+    bnb_4bit_quant_type="nf4",
+    bnb_4bit_compute_dtype=torch.bfloat16,
+    bnb_4bit_use_double_quant=True,
+)
+
+model = AutoModelForCausalLM.from_pretrained(
+    model_name,
+    quantization_config=quant_config,
+    device_map="auto"
+)
+
+print("Model loaded with 4-bit quantization!")
+
+# APPLY LORA
+
+from peft import prepare_model_for_kbit_training, LoraConfig, get_peft_model
+
+model.gradient_checkpointing_enable()
+model = prepare_model_for_kbit_training(model)
+
+lora_conf = LoraConfig(
+    r=8,
+    lora_alpha=32,
+    target_modules=[
+        "q_proj", "k_proj", "v_proj", "o_proj",
+        "gate_proj", "up_proj", "down_proj"
+    ],
+    bias="none",
+    lora_dropout=0.05,
+    task_type="CAUSAL_LM",
+)
+
+model = get_peft_model(model, lora_conf)
+model.print_trainable_parameters()
+
+print("LoRA adapters applied!")
+
+
+# TRAINING
+
+from transformers import TrainingArguments, Trainer
+
+training_args = TrainingArguments(
+    output_dir="./my-chatbot-model-v2",
+    per_device_train_batch_size=1,
+    gradient_accumulation_steps=2,
+    num_train_epochs=2,  # Increased to 2 epochs
+    learning_rate=2e-4,
+    fp16=True,
+    logging_steps=20,
+    save_steps=500,
+    eval_steps=100,
+    eval_strategy="steps",
+    save_total_limit=2,
+    load_best_model_at_end=True,
+    report_to="none"
+)
+
+trainer = Trainer(
+    model=model,
+    args=training_args,
+    train_dataset=tokenized_train,
+    eval_dataset=tokenized_eval
+)
+
+print("Starting training...")
+trainer.train()
+
+print("Training complete!")
+
+# SAVE MODEL
+
+model.save_pretrained("./my-chatbot-model-v2")
+tokenizer.save_pretrained("./my-chatbot-model-v2")
+
+print("Model saved to ./my-chatbot-model-v2")
+
+# TEST THE MODEL
+
+from transformers import AutoTokenizer, AutoModelForCausalLM
+from peft import PeftModel
+import torch
+
+print("\n" + "="*60)
+print("TESTING THE NEW MODEL")
+print("="*60)
+
+
+# Load model
+tokenizer = AutoTokenizer.from_pretrained("./my-chatbot-model-v2")
+base_model = AutoModelForCausalLM.from_pretrained(
+    model_name,
+    device_map="auto",
+    torch_dtype=torch.float16
+)
+model = PeftModel.from_pretrained(base_model, "./my-chatbot-model-v2")
+model.eval()
+
+def test_response(user_input):
+    messages = [{"role": "user", "content": user_input}]
+    
+    try:
+        prompt = tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True
+        )
+    except:
+        prompt = f"User: {user_input}\nAssistant:"
+    
+    inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
+    
+    with torch.no_grad():
+        outputs = model.generate(
+            **inputs,
+            max_new_tokens=150,
+            temperature=0.7,
+            do_sample=True,
+            top_p=0.9,
+            repetition_penalty=1.1,
+            pad_token_id=tokenizer.eos_token_id
+        )
+    
+    new_tokens = outputs[0][inputs['input_ids'].shape[1]:]
+    reply = tokenizer.decode(new_tokens, skip_special_tokens=True)
+    return reply.strip()
+
+
+# Test cases
+test_cases = [
+    "hi",
+    "how are you",
+    "what can you do",
+    "tell me about AI",
+    "give me article ideas",
+    "thank you",
+    "goodbye"
+]
+
+print("\nTest Results:")
+print("-" * 60)
+for test in test_cases:
+    response = test_response(test)
+    print(f"\n User: {test}")
+    print(f" Bot: {response}")
+    print("-" * 60)
+
+# PACKAGE AND DOWNLOAD
+
+!zip -r my_chatbot_model_v2.zip my-chatbot-model-v2
+
+from google.colab import files
+files.download("my_chatbot_model_v2.zip")
+
+print("\n Model downloaded! Now upload to Hugging Face.")
+
+# PUSH TO HUGGING FACE (OPTIONAL)
+
+from huggingface_hub import login
+
+# Login to Hugging Face
+login()
+
+# Push model + tokenizer to HF hub
+model.push_to_hub("AI-agent-v2")
+tokenizer.push_to_hub("AI-agent-v2")
+
+print(" Model pushed to Hugging Face Hub at: https://huggingface.co/your-user-name/AI-agent-v2")
+
+# Inferance
+# install libraries
+!pip install -q transformers accelerate peft torch sentencepiece
+
+# import
+from transformers import AutoTokenizer, AutoModelForCausalLM
+from peft import PeftModel
+import torch
+
+# load model
+BASE_MODEL = "Qwen/Qwen2.5-1.5B-Instruct"
+ADAPTER_MODEL = "your-user-name/AI-agent-v2"  # Change to your model
+
+print("Loading model...")
+tokenizer = AutoTokenizer.from_pretrained(ADAPTER_MODEL)
+base_model = AutoModelForCausalLM.from_pretrained(
+    BASE_MODEL,
+    device_map="auto",
+    torch_dtype=torch.float16
+)
+model = PeftModel.from_pretrained(base_model, ADAPTER_MODEL)
+model.eval()
+print("Model loaded!")
+
+# generate response
+def chat(user_input):
+    messages = [{"role": "user", "content": user_input}]
+    prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
+    
+    with torch.no_grad():
+        outputs = model.generate(**inputs, max_new_tokens=200, temperature=0.7, do_sample=True)
+    
+    response = tokenizer.decode(outputs[0][inputs['input_ids'].shape[1]:], skip_special_tokens=True)
+    return response.strip()
+
+# test
+print("\n" + "="*60)
+print("TESTING:")
+print("="*60)
+
+tests = ["hi", "how are you", "what can you do", "give me article ideas", "thank you"]
+
+for test in tests:
+    print(f"\n User: {test}")
+    print(f" Bot: {chat(test)}")
+
+# interactive mode
+print("\n" + "="*60)
+print("Type your message (or 'quit' to exit):")
+print("="*60)
+
+while True:
+    user = input("\n You: ")
+    if user.lower() in ['quit', 'q', 'exit']:
+        print("Goodbye!")
+        break
+    print(f" Bot: {chat(user)}")
